@@ -22,8 +22,10 @@ All parameter values can be seen in the Params.R file. Total area to be planted 
 # Clear environment
 rm(list = ls())
 
+setwd("~/Desktop/Coding/R_Studio/GLOFOR/Tanzania_updated")
+
 # CHANGE PARAMETERS FILE PATH HERE
-source("~/Desktop/Coding/R_Studio/Tanzania_Project/Tanzania/Params.R")
+source("Params.R")
 
 # Load packages
 library(tidyverse)

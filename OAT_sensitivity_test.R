@@ -6,9 +6,12 @@ library(ggplot2)
 # Clear environment
 rm(list = ls())
 
+# SET YOUR WORKING DIRECTORY
+setwd("~/Desktop/Coding/R_Studio/GLOFOR/Tanzania_updated")
+
 # Import parameters and function
-source("~/Desktop/Coding/R_Studio/Tanzania_Project/Tanzania/Params.R")
-source("~/Desktop/Coding Languages/R_Studio/Tanzania Project/Tanzania/New_growth_function.R")  # Fix path if needed
+source("Params.R")
+source("Growth_function.R")  # Fix path if needed
 
 # Define the default parameter values
 default_params <- list(
