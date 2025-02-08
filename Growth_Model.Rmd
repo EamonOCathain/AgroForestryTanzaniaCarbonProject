@@ -1,0 +1,587 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Introduction
+Welcome! This model is used to calculate the carbon storage potential of a proposed agroforestry enhancement scheme in Morogoro, Tanzania for the Livelihoods Fund. The only thing you should need to change for this to work is the file path of the Params.R file (in the first block below).
+
+## Reference Values
+Reference values of Mg C/Ha for each environment were taken from the literature. These were:
+
+- A static baseline value of 11.1 Mg C/Ha was taken from Muthuri et al. (2023), representing both above and belowground biomass from 'Scattered Trees on Farms'.
+- 31.9 Mg C/Ha for the spice-agroforestry system 30 years after planting, corresponding to ‘Perennial Tree-Crop Systems’ from Muthuri et al. (2023). No more specific references could be found for mature spice-agroforestry systems in this region.
+- 25.5 Mg C/Ha for the woodlot system 5 years after planting, coming from a study which measured woodlot productivity in Morogoro, Tanzania (Kimaro et al., 2011). As this reference was only for aboveground biomass, it was multiplied by a default coefficient for the same tropical latitude from Cairns et al. (1997) of 1.24 to produce an estimate of below and aboveground carbon.
+
+## Parameters Used
+All parameter values can be seen in the Params.R file. Total area to be planted was set at 27,000 ha, the proportion of spice-agroforestry was set at 80% and woodlots at 20%. Planting effort was set to peak at 3 years after the beginning of the project.
+
+# The Model 
+## Initialisation
+### Set the file paths and load libraries.
+```{r}
+# Clear environment
+rm(list = ls())
+
+# CHANGE PARAMETERS FILE PATH HERE
+source("~/Desktop/Coding/R_Studio/Tanzania_Project/Tanzania/Params.R")
+
+# Load packages
+library(tidyverse)
+```
+
+### Set Timeframe
+This sets the time frame to be run in the model.
+```{r}
+# Define the years until the maximum carbon value is reached for the agroforestry system after planting.
+year <- c(0:years_to_carbon_plateau) 
+
+# Define the years of the crediting period, i.e the time over which the carbon storage should be calculated.
+years_to_run <- c(1:years_to_crediting)
+```
+
+### Calculate the belowground biomass of biodiversity strips
+Where no estimate of below ground biomass could be found, the aboveground biomass was multiplied by a scaling factor from Cairns et al. 1994.
+```{r}
+biodiversity_C <- biodiversity_C * 1.24 # Carins et al., 1994 (used in Henry et al.)
+woodlot_C <- woodlot_C * 1.24
+```
+
+### Subtract baseline
+The baseline value was subtracted from the agroforestry and woodlot reference values at the beginning of the model such that only additional carbon storage was considered. This was done as the design intended to increase tree cover and carbon storage starting from the baseline level in which there was likely to be some scattered trees on the farms. Therefore, in all plots and calculations in the model a value of 0 Mg C/Ha corresponds to the baseline. 
+```{r}
+# Subtract baseline
+woodlot_C <- woodlot_C - baseline_C
+biodiversity_C <- biodiversity_C - baseline_C
+agroforestry_C <- agroforestry_C - baseline_C
+```
+
+### Calculate Agroforestry Area
+```{r}
+agroforestry_percent <- 1 - woodlot_percent - biodiversity_percent
+```
+
+
+### Calculate Area of Each Land-Use to be Planted
+```{r}
+woodlot_area <- target_total_area*woodlot_percent
+agroforestry_area <- target_total_area*agroforestry_percent
+biodiversity_area <- target_total_area*biodiversity_percent
+```
+
+## Planting Rate Model
+Planting rates were simulated through time, using a Gaussian function with peak ($\mu$) at 3 years after project initialisation and standard deviation ($\sigma$) of 5 (equation 1, figure 1).
+
+Eq. 1
+
+$$
+A(t) = a \cdot e^{-\frac{(t-\mu)^2}{2\sigma^2}}
+$$
+
+Where:
+	- $A(t)$: Area planted in year $t$
+	- $a$: Scaling factor
+	- $\mu$: Peak planting year (mean of the distribution)
+	- $\sigma$: Spread of planting (standard deviation)
+
+Eq. 1
+
+
+A(t) = a \cdot e^{-\frac{(t-\mu)^2}{2\sigma^2}}
+
+
+Where:
+	- A(t) : Area planted in year  t 
+	- a : Scaling factor
+	- \mu : Peak planting year (mean of the distribution)
+	- \sigma : Spread of planting (standard deviation)
+	
+The scaling factor was calculated which minimised the difference between the integrated function and the target area to be planted (equation 2). This allowed us to dynamically alter the function by setting the area desired. For agroforestry systems, replanting is often required. In the model 10% of the planted area was replanted every 5 years.
+
+Eq. 2
+
+$$
+f(a) = \left| \sum_{t \in T} A(t) - A_{\text{target}} \right|
+$$
+
+Where:
+	- $T$: The range of years considered
+	- $A_{\text{target}}$: The target area to be planted over 30 years
+	
+	
+### Planting Rates Agroforestry
+This is the initial Gaussian function used to show the planting rate's early peak and steady decline.
+```{r}
+# Define the Gaussian Planting Model
+planting_agroforestry <- function(t, a, mu, sigma) {
+  a * exp(-((t - mu)^2) / (2 * sigma^2))
+}
+
+# Function to calculate required 'a' for target total area
+calculate_a <- function(target_total, year_range, mu, sigma) {
+  # Initial guess for 'a'
+  a_guess <- 1
+  
+  # Define function to minimize (difference between target and calculated total area)
+  f <- function(a) {
+    year_area_agroforestry <- sapply(year_range, planting_agroforestry, a = a, mu = mu, sigma = sigma)
+    return(abs(sum(year_area_agroforestry) - target_total))
+  }
+  
+  # Optimize 'a'
+  opt_result <- optimize(f, interval = c(0, 1e6))
+  return(opt_result$minimum)
+}
+
+# Calculate 'a' dynamically
+a <- calculate_a(agroforestry_area, year, mu, sigma)
+
+# Compute area planted each year
+year_area_agroforestry <- sapply(year, planting_agroforestry, a = a, mu = mu, sigma = sigma)
+
+# Calculate total area planted
+total_area <- sum(year_area_agroforestry)
+
+# Plot the data
+plot(year, year_area_agroforestry,
+     xlab = "Year", ylab = "Hectares per Year",
+     main = "Area Agroforestry Planted Each Year", 
+     ylim = c(0, max(year_area_agroforestry)))
+
+# Subtitle
+mtext(paste("Total Area Spice Agroforestry Planted", round(total_area, 2), "Ha"), 
+      side = 3, line = 0.5, font = 2, cex = 0.8)
+```
+
+### Replanting Agroforestry
+This is the replanting function used to cause 10% of the area planted to reoccur every 5 years. 
+```{r}
+replanting_function <- function(values, years, interval, intensity) {
+  if (length(values) != length(years)) {
+    stop("Values and years must have the same length")
+  }
+  
+  # Assume the first year as the baseline
+  base_year <- min(years)
+  replanting_area <- rep(0, length(years))  # Initialize output vector with zeros
+  
+  for (i in seq_along(years)) {
+    year <- years[i]
+    
+    # Skip years before the first interval
+    if (year < base_year + interval) {
+      next
+    }
+    
+    # Look for original values only, applying decay at fixed intervals
+    for (j in seq_along(years)) {
+      original_year <- years[j]
+      
+      if (original_year + interval <= year && (year - original_year) %% interval == 0) {
+        replanting_area[i] <- replanting_area[i] + (intensity * values[j])
+      }
+    }
+  }
+  
+  return(replanting_area)
+}
+
+replanting_area <- replanting_function(year_area_agroforestry, year, replanting_interval, replanting_intensity)
+
+# Add the replanting area to the final agroforestry area
+year_area_agroforestry_with_replanting <- year_area_agroforestry + replanting_area
+
+# Plot the original data
+plot(year, year_area_agroforestry,
+     xlab = "Year", ylab = "Hectares per Year",
+     main = "Area Agroforestry Planted Each Year", 
+     pch=16,
+     ylim = c(0, max(year_area_agroforestry, replanting_area))) # Ensure y-axis fits both datasets  # Black line and dots for original values
+
+# Overlay the adjusted (decayed) values
+points(year, replanting_area, col = "blue", pch=16)  # Dashed blue line for decayed values
+
+# Subtitle with total area
+mtext(paste("Total Area Spice Agroforestry Planted", round(total_area, 2), "Ha"), 
+      side = 3, line = 0.5, font = 2, cex = 0.8)
+
+# Add a legend
+legend("topright", legend = c("Original Planting", "Replanting"), 
+       col = c("black", "blue"), pch = 16, lty = c(1, 2), bty = "n")
+
+```
+
+
+### Fixed Area Planting biodiversity
+This is for the biodiversity area, which was left out in the final model.
+```{r}
+# Define the Gaussian Planting Model
+planting_biodiversity <- function(t, a, mu, sigma) {
+  a * exp(-((t - mu)^2) / (2 * sigma^2))
+}
+
+# Function to calculate required 'a' for target total area
+calculate_a <- function(target_total, year_range, mu, sigma) {
+  # Initial guess for 'a'
+  a_guess <- 1
+  
+  # Define function to minimize (difference between target and calculated total area)
+  f <- function(a) {
+    year_area_biodiversity <- sapply(year_range, planting_biodiversity, a = a, mu = mu, sigma = sigma)
+    return(abs(sum(year_area_biodiversity) - target_total))
+  }
+  
+  # Optimize 'a'
+  opt_result <- optimize(f, interval = c(0, 1e6))
+  return(opt_result$minimum)
+}
+
+# Calculate 'a' dynamically
+a <- calculate_a(biodiversity_area, year, mu, sigma)
+
+# Compute area planted each year
+year_area_biodiversity <- sapply(year, planting_biodiversity, a = a, mu = mu, sigma = sigma)
+
+if (biodiversity_percent ==0){
+  year_area_biodiversity <- 0*year_area_biodiversity
+}
+
+# Calculate total area planted
+total_area <- sum(year_area_biodiversity)
+
+# Plot the data
+plot(year, year_area_biodiversity,
+     xlab = "Year", ylab = "Hectares per Year",
+     main = "Area biodiversity Planted Each Year", 
+     ylim = c(0, max(year_area_biodiversity)))
+
+# Subtitle
+mtext(paste("Total Biodiversity Area Planted", round(total_area, 2), "Ha"), 
+      side = 3, line = 0.5, font = 2, cex = 0.8)
+```
+
+
+### Fixed Area Planting woodlots
+This is the planting scheme for the woodlots, it uses the same method as the agroforestry.
+```{r}
+# Define the Gaussian Planting Model
+planting_woodlot <- function(t, a, mu, sigma) {
+  a * exp(-((t - mu)^2) / (2 * sigma^2))
+}
+
+# Function to calculate required 'a' for target total area
+calculate_a <- function(target_total, year_range, mu, sigma) {
+  # Initial guess for 'a'
+  a_guess <- 1
+  
+  # Define function to minimize (difference between target and calculated total area)
+  f <- function(a) {
+    year_area_woodlot <- sapply(year_range, planting_woodlot, a = a, mu = mu, sigma = sigma)
+    return(abs(sum(year_area_woodlot) - target_total))
+  }
+  
+  # Optimize 'a'
+  opt_result <- optimize(f, interval = c(0, 1e6))
+  return(opt_result$minimum)
+}
+
+# Calculate 'a' dynamically
+a <- calculate_a(woodlot_area, year, mu, sigma)
+
+# Compute area planted each year
+year_area_woodlot <- sapply(year, planting_woodlot, a = a, mu = mu, sigma = sigma)
+
+# Calculate total area planted
+total_area <- sum(year_area_woodlot)
+```
+
+### Plot Planting Timelines
+This graphs the planting cumulatively over time.
+```{r}
+#Calculate total area planted
+total_area_each_year <- year_area_agroforestry_with_replanting + year_area_biodiversity + year_area_woodlot
+cumulative_area_agro <- cumsum(year_area_agroforestry_with_replanting)
+cumulative_area_biodiversity <- cumsum(year_area_biodiversity)
+cumulative_area_woodlot <- cumsum(year_area_woodlot)
+cumulative_area <- cumsum(total_area_each_year)
+
+# Plot 
+plot(
+  years_to_run,
+  cumulative_area_agro[2:31],
+  type = "l",
+  col = "purple",
+  lwd = 2,
+  main = paste("Total Area Planted Over", max(years_to_run), "Years:", target_total_area, "Ha"),
+  xlab = "Year",
+  ylab = "Total Area (Ha)",
+  ylim = c(0, max(cumulative_area) )
+)
+
+# Add additional lines
+lines(years_to_run, cumulative_area_woodlot[2:31], col = "blue", lwd = 2)
+lines(years_to_run, cumulative_area_biodiversity[2:31] , col = "green", lwd = 2)
+lines(years_to_run, cumulative_area[2:31] , col = "black", lwd = 2)
+
+# Add legend
+legend("topleft", legend = c("Woodlot", "Biodiversity", "Agroforestry", "Total"), 
+       col = c("blue", "green", "purple", "black"), lwd = 2)
+```
+
+## Carbon Accumulation Model
+The Chapman-Richards curve was used to model growth rates in both the agroforestry systems and woodlots over 30 years (Equation 3, figure 3, Pienaar and Turnbull, 1973).
+
+Eq. 3
+
+$$
+C(t) = C_{\text{max}} \times \left(1 - e^{-k t}\right)^p
+$$
+
+Where:
+	•	$C(t)$: Carbon accumulated at time $t$
+	•	$C_{\text{max}}$: Maximum carbon storage = 20.8
+	•	$k$: Growth rate parameter = 0.2
+	•	$p$: Shape parameter
+	•	$e$: Euler’s constant
+	
+### Carbon Accumulation in the Agroforestry System
+
+For the agroforestry system the reference carbon density value from Muthuri et al. (2023) was set as the maximum after 30 years. Reyes et al. (2009) reported biomass accumulation in Gliricidia spice-agroforestry systems in Tanzania 6 years after planting of 9.54 Mg C/Ha. The system reported by Reyes et al. is very similar to the proposed spice system, but it reported the carbon storage after 6 years and not at maturity.
+
+Therefore, it was decided to find a shape parameter $p$ which would cause the function to meet the reference value of 9.54 Mg C/Ha at 6 years from planting (figure 3). Rearranging Equation 3 to solve for $p$ produces an equation which cannot be solved algebraically. Therefore, Equation 4 was solved using a root-finding algorithm (uniroot in R) to find the value of $p$ for which $f(p) = 0$.
+
+This gives the value of $p$ for which the difference between the Chapman-Richards equation and the target value is approximately zero. This value of $p$ was then used in Equation 3 to calculate the carbon accumulation over time for the agroforestry system.
+
+Eq. 4
+
+$$
+f(p) = C_{\text{max}} \times \left(1 - e^{-6k}\right)^p - 9.54
+$$
+```{r}
+# Define the function to solve for p
+solve_p <- function(p, x_target, y_target, max, k) {
+  return(max * (1 - exp(-k * x_target))^p - y_target)
+}
+
+# Find the correct p value
+adjusted_p <- uniroot(solve_p, interval = c(0.1, 10), x_target = 6, y_target = 9.5424, 
+                       max = agroforestry_C, k = k_agroforestry)$root
+
+# Define Chapman-Richards function with auto-adjusted p
+chapman_richards <- function(x, max, k, p) {
+  return(max * (1 - exp(-k * x))^p)
+}
+
+# Calculate carbon accumulation using the optimized p value
+year_C_agro <- sapply(year, function(i) chapman_richards(i, max = agroforestry_C, 
+                                                          k = k_agroforestry, p = adjusted_p))
+
+# Plot carbon accumulation
+plot(year, year_C_agro, col = "blue", lwd = 2,
+     main = paste("Carbon Accumulation Over", length(years_to_run), "Years in Agroforestry After Planting"),
+     xlab = "Year", ylab = "Mg C/Ha")
+
+# Add two dotted black lines converging at (6, 9.5424)
+segments(x0 = 6, y0 = 0, x1 = 6, y1 = 9.5424, col = "black", lty = 2, lwd = 2)  # First line
+segments(x0 = 0, y0 = 9.5424, x1 = 6, y1 = 9.5424, col = "black", lty = 2, lwd = 2)  # Second line
+
+# Add an arrow pointing to (6, 9.5424)
+arrows(x0 = 8, y0 = 11, x1 = 6.3, y1 = 9.8, col = "black", lwd = 2, length = 0.1)
+
+# Add a label next to the arrow
+text(x = 8.5, y = 11, labels = "Reference value 9.54 Mg C/ Ha from Reyes et al., (2009)", col = "black", pos = 4, cex = 0.9)
+```
+
+### Model of Carbon Accumulation in Woodlots 
+Woodlots followed a 5-year cycle of Chapman-Richards growth and were pollarded every 5 years. Kimaro et al. (2011) measured 25.5 Mg C/Ha after 5 years in Acacia crassicarpa woodlots in Morogoro. The Chapman-Richards equation was solved to find the maximum carbon at maturity ($C_{\text{max}}$) which would result in 25.5 Mg C/Ha after 5 years (Equation 5, using $k = 1$ and $p = 2$).
+
+For the first rotation, the years 1-5 were used. To simulate pollarding with subsequent regrowth (faster and to a higher final $C$ value), the years 1.5-5.5 were used in 1-unit intervals for the following rotations. This resulted in a simulated harvesting intensity with 60.8% of the biomass remaining.
+
+The average carbon stock over the 30-year period was taken to represent a stable measure of the carbon present in the woodlots.
+
+$$
+C_{\text{max}} \times \left(1 - e^{-5k}\right)^p = 25.5
+$$
+
+Where:
+	•	$C_{\text{max}}$: Maximum carbon storage at maturity
+	•	$k$: Growth rate parameter ($k = 1$)
+	•	$p$: Shape parameter ($p = 2$)
+	•	$e$: Euler’s constant
+
+```{r}
+# Calculate carbon accumulation
+year_C_woodlot_5 <- c()
+year_C_woodlot_10 <- c()
+
+#Define function to find the max C at which the reference level is met after 5 years
+chapman_richards_woodlot <- function(x, max = woodlot_C, k, p, rotation_period) {
+  # Solve for max carbon storage (C_max)
+  C_max <- woodlot_C / ((1 - exp(-k * rotation_period))^p)
+
+  # Standard Chapman-Richards growth function
+  base_growth <- C_max * (1 - exp(-k * x))^p
+
+  return(base_growth)
+}
+ 
+# First rotation
+for (i in 1:5) {
+  year_C_woodlot_5 <- append(year_C_woodlot_5, chapman_richards_woodlot(i, max = woodlot_C, k = k_woodlot, p = p_woodlot, rotation_period))
+}
+
+# Second rotation
+for (i in 1.5:6) {
+  year_C_woodlot_10 <- append(year_C_woodlot_10, chapman_richards_woodlot(i, max = woodlot_C, k = k_woodlot, p = p_woodlot, rotation_period))
+}
+
+# Add the rotations together
+year_C_woodlot_25 <- rep(year_C_woodlot_10, (length(year))/5)
+year_C_woodlot <- append(year_C_woodlot_5, year_C_woodlot_25)
+year_C_woodlot <- year_C_woodlot[1:31]
+
+# This averages the standing biomass across all years
+avg_woodlot_C <- mean(year_C_woodlot)
+avg_woodlot_C_vect <- rep(avg_woodlot_C, length(years_to_run))
+
+# This takes the total productivity (i.e sums the peaks)
+max_value <- max(year_C_woodlot) # Find the maximum value
+max_count <- sum(year_C_woodlot == max_value) # Count occurrences of the maximum value
+# Sum the peaks of all the second rotations and then add the peak of the first rotatian and the final value at 30 years
+total_woodlot_C <- woodlot_C*max_count + year_C_woodlot[31] + max(year_C_woodlot_5) 
+total_woodlot_C_vect <- rep(total_woodlot_C, length(years_to_run))
+
+# Plot carbon accumulation
+plot(year, year_C_woodlot, col = "black", lwd = 2,
+     main = "Carbon Accumulation in Woodlots After Planting",
+     xlab = "Year", ylab = "Mg C/Ha", type="l")
+
+# Subtitle
+mtext(paste("Average C stock Across Lifespan", round(avg_woodlot_C, 2), "Mg C ha-1"), side = 3, line = 0.5, font = 2, cex = 0.8)
+
+```
+
+### Model of C Accumulation in the Biodiversity
+This section isn't used but is the same method as the agroforestry.
+```{r}
+chapman_richards <- function(x, max, k, p) {
+  return(max * (1 - exp(-k * x))^p)
+}
+
+# Calculate carbon accumulation
+year_C_biodi <- c()
+
+for (i in year) {
+  year_C_biodi <- append(year_C_biodi, chapman_richards(i, max = biodiversity_C, k = k_agroforestry, p = p))
+}
+
+# Plot carbon accumulation
+plot(year, year_C_biodi, col = "blue", lwd = 2,
+     main = "Carbon Accumulation in Biodiversity After Planting",
+     xlab = "Year", ylab = "Mg C/Ha")
+
+# Subtitle
+mtext(paste("Total", biodiversity_C, "Mg C ha-1"), side = 3, line = 0.5, font = 2, cex = 0.8)
+
+
+
+```
+
+## Calculate the Total Carbon Storage for Each Land Use Type and Overall
+To calculate the total carbon stored by each land-use type, the area planted each year was iterated through and multiplied by a vector containing the carbon accumulation values from the growth curves equation (Equation 5). These were stored in a matrix, and the columns were summed to get the total storage each year (see the markdown file in the appendix if unclear). The total storage was then summed across land-use types to get the final estimate.
+
+Eq. 5
+
+$$
+C_{i,t} = \sum_{\tau=1}^{t} A_{i,\tau} \cdot G_{i,t-\tau}
+$$
+
+Where:
+	•	$t$: Year after planting on growth curves
+	•	$\tau$: Year since the beginning of the project
+	•	$C_{i,t}$: Carbon stored by land-use type $i$ in year $t$
+	•	$A_{i,\tau}$: New hectares planted in year $\tau$
+	•	$G_{i,t-\tau}$: Carbon accumulation per hectare in year $t-\tau$
+
+
+```{r}
+# Matrix for the results
+total_yearly_C_mat <- matrix(0, nrow = 0, ncol = years_to_crediting + 1)
+
+# Function to calculate yearly carbon for each land use
+yearly_C_function <- function(area, carbon) {
+  counter <- 0  
+  data_matrix <- matrix(0, nrow = years_to_crediting + 1, ncol = years_to_crediting + 1)
+
+  # Go through the year_area_agroforestry_with_plantings and calculate yearly storage
+  for (i in area[1:(years_to_crediting + 1)]) {
+    # Multiply year_area_agroforestry_with_planting by growth curve, but only for the number of years left until the crediting period 
+    C_vect <- i * carbon[1:(years_to_crediting + 1 - counter)]
+    
+    # Add the vector to the matrix at the appropriate point, with 0s before it.
+    data_matrix[counter + 1, (counter + 1):(years_to_crediting + 1)] <- C_vect
+    
+    # Update counter
+    counter <- counter + 1
+  }
+    return(data_matrix)
+}
+
+yearly_C_matrix_agro <- yearly_C_function(year_area_agroforestry_with_replanting, year_C_agro)
+yearly_C_matrix_bio <- yearly_C_function(year_area_biodiversity, year_C_biodi)
+yearly_C_matrix_woodlot <- yearly_C_function(year_area_woodlot, year_C_woodlot)
+
+total_C_vect_agro <- colSums(yearly_C_matrix_agro)
+total_C_vect_bio <- colSums(yearly_C_matrix_bio)
+total_C_vect_woodlot <- colSums(yearly_C_matrix_woodlot)
+
+final_matrix <- rbind(total_C_vect_agro, total_C_vect_bio, total_C_vect_woodlot)
+final_matrix <- rbind(final_matrix, colSums(final_matrix))
+final_df <- as.data.frame(final_matrix)
+rownames(final_df) <- c("Total C Agroforestry", "Total C Biodiversity", "Total C Woodlot",  "Total C")
+final_df
+```
+
+### Plot the Total Carbon Storage Over Time
+```{r}
+# Define colors for different carbon sources
+colors <- c("red", "blue", "green", "black")  # Colors for each row
+
+# Convert row names to a vector for legend
+legend_labels <- rownames(final_df)
+
+# Convert to numeric matrix (in case it's a dataframe)
+final_matrix <- as.matrix(final_df)
+
+# Define X-axis values
+years_seq <- 0:(years_to_crediting)  # Adjusted to match column length
+
+# Plot the first row of the dataframe as the base plot
+plot(
+  years_seq,
+  final_matrix[1, ] / 1000000,  # Convert to Million Mg CO2
+  type = "l",
+  col = colors[1],
+  lwd = 2,
+  main = paste("Additional Carbon Stored after", length(years_seq), "years:", 
+               round(((final_matrix[4, ncol(final_matrix)] / 1000000)) * 3.67, 4), "(Million Mg CO2)"),
+  xlab = "Year",
+  ylab = "Total CO2 (Million Mg CO2)",
+  ylim = c(0, max(final_matrix) / 1000000)  # Adjust Y-axis limits
+)
+
+# Add additional lines for each row in the dataframe
+for (i in 2:4) {
+  lines(years_seq, final_matrix[i, ] / 1000000, col = colors[i], lwd = 2)
+}
+
+# Add legend
+legend("topleft", legend = legend_labels, col = colors, lwd = 2)
+
+# Subtitle showing average carbon stock
+mtext(paste("Average Carbon Stock:", biodiversity_C, "Mg C ha-1"), 
+      side = 3, line = 0.5, font = 2, cex = 0.8)
+```
+
+
+
+
